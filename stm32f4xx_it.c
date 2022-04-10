@@ -59,6 +59,7 @@ extern void turn_off(pins);
 
 /* External variables --------------------------------------------------------*/
 extern HCD_HandleTypeDef hhcd_USB_OTG_FS;
+extern ADC_HandleTypeDef hadc1;
 /* USER CODE BEGIN EV */
 extern int Timer;
 extern int button_cond;
@@ -66,6 +67,17 @@ extern int modes_amount;
 
 int button_pressed_ctr = 0;
 int pressed_row = 10;
+
+void EXTI0_IRQHandler(void){
+	/*
+	EXTI->PR = EXTI_PR_PR0;
+	Timer = 0;
+	turn_off(LD_GREEN | LD_RED | LD_BLUE | LD_ORANGE);
+	button_cond = (button_cond + 1) % modes_amount;
+	*/
+
+
+}
 /* USER CODE END EV */
 
 /******************************************************************************/
@@ -207,27 +219,18 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
-  * @brief This function handles EXTI line0 interrupt.
+  * @brief This function handles ADC1 global interrupt.
   */
-void EXTI0_IRQHandler(void)
+void ADC_IRQHandler(void)
 {
-  /* USER CODE BEGIN EXTI0_IRQn 0 */
-  EXTI->PR = EXTI_PR_PR0; //Сбрасываем флаг прерывания
+  /* USER CODE BEGIN ADC_IRQn 0 */
+  TIM4->CCR1 = ADC1->DR;
+  ADC1->SR=0;
+  /* USER CODE END ADC_IRQn 0 */
+  HAL_ADC_IRQHandler(&hadc1);
+  /* USER CODE BEGIN ADC_IRQn 1 */
 
-  if(button_pressed_ctr >= pressed_row){
-	  turn_off(LD_GREEN | LD_RED | LD_BLUE | LD_ORANGE);
-	  button_cond = (button_cond + 1) % modes_amount;
-	  button_pressed_ctr = 0;
-  }
-  else
-	  button_pressed_ctr += 1;
-
-
-  /* USER CODE END EXTI0_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(PH0_OSC_IN_Pin);
-  /* USER CODE BEGIN EXTI0_IRQn 1 */
-
-  /* USER CODE END EXTI0_IRQn 1 */
+  /* USER CODE END ADC_IRQn 1 */
 }
 
 /**

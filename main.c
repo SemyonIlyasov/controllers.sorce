@@ -22,7 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+// #include "stm32f411e_discovery_audio.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,12 +47,16 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
 I2C_HandleTypeDef hi2c1;
 
 I2S_HandleTypeDef hi2s2;
 I2S_HandleTypeDef hi2s3;
 
 SPI_HandleTypeDef hspi1;
+
+TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 int Timer = 0;
@@ -64,6 +71,8 @@ static void MX_I2C1_Init(void);
 static void MX_I2S2_Init(void);
 static void MX_I2S3_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_TIM4_Init(void);
+static void MX_ADC1_Init(void);
 void MX_USB_HOST_Process(void);
 
 /* USER CODE BEGIN PFP */
@@ -78,6 +87,8 @@ int delation = 1000000;
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// Basic functions
+
 void my_init(void){
 	// INIT GPIOD
 	int li;
@@ -120,9 +131,12 @@ void my_init(void){
 
 	EXTI->PR = EXTI_PR_PR0;      //Сбрасываем флаг прерывания
 	                               //перед включением самого прерывания
-	EXTI->IMR |= EXTI_IMR_MR0;   //Включаем прерывание 0-го канала EXTI
+
+	EXTI->IMR |= EXTI_IMR_MR0;   //Включаем прерывание 0-го канала EXTI interrupt mask register
 
 	NVIC_EnableIRQ(EXTI0_IRQn);  //Разрешаем прерывание в контроллере прерываний
+
+	EXTI->SWIER |= EXTI_IMR_MR0; // разрешить принимать event с порта 0
 }
 
 
@@ -148,6 +162,8 @@ double f_calc(){
 
 }
 
+
+
 void check_button(int amount_of_modes){
 	  if ((GPIOA->IDR & GPIO_PIN_0) == 1){
 		  button_cond = (button_cond + 1) % amount_of_modes;
@@ -156,6 +172,12 @@ void check_button(int amount_of_modes){
 	  }
 }
 
+void PWM_led_init(GPIO_TypeDef * GPIOx, int ledbits)
+{
+		GPIOx->MODER &= (~ledbits);
+		GPIOx->MODER ^= ledbits;
+}
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// traffic light
 void day_mode(void){
 	  if(Timer >= 3000){
 		  Timer = 0;
@@ -213,24 +235,13 @@ void svetofor_without_interrupt(){
 	    /* USER CODE END WHILE */
 	    MX_USB_HOST_Process();
 	    /* USER CODE BEGIN 3 */
-	    if ((GPIOA->IDR & GPIO_PIN_0) == 1){
-	    	turn_off(LD_GREEN | LD_RED | LD_BLUE | LD_ORANGE);
+	    if ((GPIOA->IDR & GPIO_PIN_0) == 1)
 	    	button_pressed_time += 1;
-	    	delay_timer += 1;
-	    }
 	    else
 	    {
-	    	if(delay_timer >= delation){
-	    		double k = ((double)button_pressed_time) / delation;
-	    		if(k > rattling_rate){
-	    			button_cond = (button_cond + 1) % modes_amount;
-	    			//turn_off(LD_GREEN | LD_RED | LD_BLUE | LD_ORANGE);
-	    		}
-	    		button_pressed_time = 0;
-	    		delay_timer = 0;
-	    	}
-	    	else if (delay_timer != 0)
-	    		delay_timer += 1;
+	    if(button_pressed_time >= 8)
+	    	button_cond = (button_cond + 1) % modes_amount;
+	    button_pressed_time = 0;
 	    traffic_light();
 	    }
 	  }
@@ -240,8 +251,129 @@ void svetofor_with_interrupt(){
 	while(1)
 		traffic_light();
 }
-/* USER CODE END 0 */
 
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// PWM
+void PWM_concrete_TIM_init(TIM_HandleTypeDef* htimx){
+
+	  HAL_TIM_Base_Start(htimx);
+	  HAL_TIM_PWM_Init(htimx);
+	  HAL_TIM_PWM_Start(htimx, TIM_CHANNEL_1);
+	  HAL_TIM_PWM_Start(htimx, TIM_CHANNEL_2);
+	  HAL_TIM_PWM_Start(htimx, TIM_CHANNEL_3);
+	  HAL_TIM_PWM_Start(htimx, TIM_CHANNEL_4);
+
+}
+
+
+void PWM_capture_button_v2(__IO uint32_t* CCRx, int* bit, const int max_pulse_val, const uint16_t step){
+	if ((GPIOA->IDR & GPIO_PIN_0)){
+		if(*bit == 0)
+			if(*CCRx < max_pulse_val - step)
+				*CCRx += step;
+			else
+				*bit = 1;
+		else
+			if(*CCRx > step)
+				*CCRx -= step;
+			else
+				*bit = 0;
+	}
+}
+
+
+void PWM_led_controller_v1(TIM_TypeDef * TIMx, const uint32_t max_pulse_val, const uint16_t pulse_step){
+
+	int ch1 = 0;
+	int ch2 = 0;
+	int ch3 = 0;
+	int ch4 = 0;
+
+	while(1)
+	{
+	  	PWM_capture_button_v2(&TIMx->CCR1, &ch1, max_pulse_val, pulse_step);
+	  	PWM_capture_button_v2(&TIMx->CCR2, &ch2, max_pulse_val, pulse_step);
+	  	PWM_capture_button_v2(&TIMx->CCR3, &ch3, max_pulse_val, pulse_step);
+	  	PWM_capture_button_v2(&TIMx->CCR4, &ch4, max_pulse_val, pulse_step);
+
+	  	HAL_Delay(1);
+	  	// Обязателен HAL_Delay(1); , т.к. светодиоды не обновятся без него
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// Sinusoids PWM
+
+#define pi  3.1415926535
+
+int* fill_sine(const int n, const int max_pulse_val)
+{
+
+int* sin_ar = (int*)malloc(n * sizeof(int));
+
+
+for(int i = 0; i < n; i += 1)
+	sin_ar[i] = max_pulse_val/2 + (int)(((sin((double)(i)*pi/180.) + 1) /2)*max_pulse_val) ;
+
+
+return sin_ar;
+
+}
+
+int* fill_parabola(const int n){
+	int* arr = (int*)calloc(n, sizeof(int));
+	for(int i = 0; i < n; i++)
+	{
+		arr[i] = (int)(i*i);
+	}
+	return arr;
+}
+
+void PWM_sinusoid_controller_with_generated_arr(__IO uint32_t* CCRx, const uint32_t max_pulse_val){
+
+	int i = 0;
+	int n = 360;
+	// int* arr = fill_parabola(280);
+	int* arr = fill_sine(n, max_pulse_val);
+	while(1)
+	{
+		// if ((GPIOA->IDR & GPIO_PIN_0))
+		{
+			i = (i + 1) % n;
+			*CCRx = arr[i];
+
+		}
+		HAL_Delay(1);
+		// Обязателен HAL_Delay(1); , т.к. светодиоды не обновятся без него
+	}
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////// ADC
+
+#define VREF 3.3065 // напряжение ИОН
+void ADC_controller_with_pregenerated_sinusoid_PWM(__IO uint32_t* PWM_CCRx, __IO uint32_t* ADC_CCRx, ADC_TypeDef * ADCx, const uint32_t max_pulse_val)
+{
+	int i = 0;
+	int n = 360;
+	int* arr = fill_sine(n, max_pulse_val);
+	HAL_ADC_Start(&hadc1); // запускаем преобразование сигнала АЦП
+	while(1)
+	{
+		// if ((GPIOA->IDR & GPIO_PIN_0))
+		{
+			i = (i + 1) % n;
+			*PWM_CCRx = arr[i];
+			// *ADC_CCRx = ADC_GetConversionValue(ADC1);// HAL_ADC_GetValue(&hadc1);
+			// HAL_ADC_Stop(&hadc1); // запускаем преобразование сигнала АЦП
+			// HAL_ADC_Start(&hadc1); // запуск преобразования
+			// HAL_ADCEx_InjectedPollForConversion(&hadc1, 10); // ожидание окончания преобразования
+			*ADC_CCRx = (float)HAL_ADC_GetValue(&hadc1) * VREF / 4096. ;
+			HAL_Delay(1);
+		}
+		// HAL_Delay(1);
+		// Обязателен HAL_Delay(1); , т.к. светодиоды не обновятся без него
+	}
+}
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/* USER CODE END 2 */
 /**
   * @brief  The application entry point.
   * @retval int
@@ -278,24 +410,35 @@ int main(void)
   MX_I2S3_Init();
   MX_SPI1_Init();
   MX_USB_HOST_Init();
+  MX_TIM4_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
 
-  my_init();
-  double res = f_calc();
+  // my_init();
+  // double res = f_calc();
+
+
   /* USER CODE END 2 */
 
-  res += 0;
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-svetofor_with_interrupt();
 
-// TODO
-/*
- * Сделать светофор на прерываниях, потом настроить EXTI0 interrupt через регистр NVIC
- */
+
+  //svetofor_with_interrupt();
+
+
+    /* USER CODE END WHILE */
+    MX_USB_HOST_Process();
+
+    /* USER CODE BEGIN 3 */
+
+    PWM_concrete_TIM_init(&htim4);
+    // PWM_led_controller_v1(TIM4, 20000, 100);
+    // PWM_sinusoid_controller_based_on_timer(TIM4, &TIM4->CCR4, 65535);
+    // PWM_sinusoid_controller_with_generated_arr(&TIM4->CCR4, 10000);
+    ADC_controller_with_pregenerated_sinusoid_PWM(&TIM4->CCR4, &TIM4->CCR1, ADC1, 10000);
   /* USER CODE END 3 */
 }
-
 
 /**
   * @brief System Clock Configuration
@@ -358,6 +501,56 @@ void PeriphCommonClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
+  */
+  sConfig.Channel = ADC_CHANNEL_1;
+  sConfig.Rank = 1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
 }
 
 /**
@@ -501,6 +694,80 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM4_Init(void)
+{
+
+  /* USER CODE BEGIN TIM4_Init 0 */
+
+  /* USER CODE END TIM4_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM4_Init 1 */
+
+  /* USER CODE END TIM4_Init 1 */
+  htim4.Instance = TIM4;
+  htim4.Init.Prescaler = 0;
+  htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim4.Init.Period = 65535;
+  htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim4, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.Pulse = 21000;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.Pulse = 14000;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.Pulse = 7000;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM4_Init 2 */
+
+  /* USER CODE END TIM4_Init 2 */
+  HAL_TIM_MspPostInit(&htim4);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -524,8 +791,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(OTG_FS_PowerSwitchOn_GPIO_Port, OTG_FS_PowerSwitchOn_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOD, LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |Audio_RST_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(Audio_RST_GPIO_Port, Audio_RST_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : DATA_Ready_Pin */
   GPIO_InitStruct.Pin = DATA_Ready_Pin;
@@ -559,14 +825,20 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD4_Pin LD3_Pin LD5_Pin LD6_Pin
-                           Audio_RST_Pin */
-  GPIO_InitStruct.Pin = LD4_Pin|LD3_Pin|LD5_Pin|LD6_Pin
-                          |Audio_RST_Pin;
+  /*Configure GPIO pin : PC6 */
+  GPIO_InitStruct.Pin = GPIO_PIN_6;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM3;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : Audio_RST_Pin */
+  GPIO_InitStruct.Pin = Audio_RST_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+  HAL_GPIO_Init(Audio_RST_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : OTG_FS_OverCurrent_Pin */
   GPIO_InitStruct.Pin = OTG_FS_OverCurrent_Pin;
