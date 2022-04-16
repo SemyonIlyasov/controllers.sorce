@@ -40,6 +40,9 @@
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 extern void turn_off(pins);
+extern uint32_t ADC1_CR2_JSWSTART_MASK; // JSWSTART - 23 bit
+extern uint32_t ADC1_JEOCIE_MASK;		  // JEOCIE - 8 bit
+extern uint32_t ADC1_ADON_MASK;		  // ADON - 1 bit
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -68,6 +71,8 @@ extern int modes_amount;
 int button_pressed_ctr = 0;
 int pressed_row = 10;
 
+extern uint32_t ADC1_JDR1;
+extern uint32_t ADC2_JDR2;
 void EXTI0_IRQHandler(void){
 	/*
 	EXTI->PR = EXTI_PR_PR0;
@@ -224,8 +229,20 @@ void SysTick_Handler(void)
 void ADC_IRQHandler(void)
 {
   /* USER CODE BEGIN ADC_IRQn 0 */
-  TIM4->CCR1 = ADC1->DR;
-  ADC1->SR=0;
+	// regular interrupt flag to zero
+	ADC1->SR &= 0xFFFFFFFC;
+	// injected interrupt flag to zero
+	ADC1->SR &= 0xFFFFFFFB;
+
+
+	ADC1_JDR1 = ADC1->JDR1;
+	ADC2_JDR2 = ADC1->JDR2;
+
+	//start adc (JSWSTART)
+	ADC1->CR2 |= ADC1_CR2_JSWSTART_MASK;
+
+	// read JDR1 from ADC1->IN9
+
   /* USER CODE END ADC_IRQn 0 */
   HAL_ADC_IRQHandler(&hadc1);
   /* USER CODE BEGIN ADC_IRQn 1 */
